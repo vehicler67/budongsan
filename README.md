@@ -44,3 +44,11 @@ python3 build.py   # .app 번들 빌드
 - PDF 페이지 너비 자동 스케일 보정 (Mac A4 변형 대응)
 - 파싱 전 PDF 사전 진단 로그 추가 (단어수, 섹션수 표시)
 - 파싱 실패 시 traceback 전체 로그 출력
+
+### v1.0.4 변경사항 (사용자 수정 반영)
+- **app.py**: PyInstaller 번들 실행 시 `_MEIPASS` 경로를 `sys.path`에 등록
+  → 번들 환경에서 parser/exporter 모듈 import 실패 문제 해결 (처리 안 되던 근본 원인)
+- **parser.py**: CID 폰트 PDF 자동 감지 + OCR 폴백 (pytesseract + PyMuPDF)
+  → 텍스트 레이어가 없는 스캔 PDF도 처리 가능
+- OCR 모드: 한글 음절 공백 자동 제거, 브래킷 없는 유연한 섹션 감지
+- Tesseract 경로 자동 탐색 (Homebrew 설치 위치 포함)

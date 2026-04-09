@@ -365,13 +365,16 @@ class App(tk.Tk):
                     # PDF 유효성 사전 확인
                     try:
                         import pdfplumber as _plb
+                        from parser import _has_cid as _hc
                         with _plb.open(pdf_path) as _pdf:
                             _pg0 = _pdf.pages[0]
-                            _words = _pg0.extract_words()
+                            _words = _pg0.extract_words(x_tolerance=3, y_tolerance=3, keep_blank_chars=False, use_text_flow=False)
                             _pg_cnt = len(_pdf.pages)
                         self.q.put(("log", f"  └ PDF 확인: {_pg_cnt}페이지, 1페이지 단어수={len(_words)}", "info"))
                         if len(_words) == 0:
                             raise ValueError("PDF에서 텍스트를 추출할 수 없습니다. 스캔 이미지 PDF이거나 보호된 파일일 수 있습니다.")
+                        if _hc(_words):
+                            self.q.put(("log", "  └ CID 폰트 감지 → OCR 모드로 전환합니다...", "info"))
                     except Exception as _pre_e:
                         raise ValueError(f"PDF 열기 실패: {_pre_e}")
 
