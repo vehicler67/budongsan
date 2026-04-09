@@ -27,3 +27,8 @@ python3 build.py   # .app 번들 빌드
 - `src/exporter.py` — Excel/CSV 출력
 - `src/make_icon.py` — 앱 아이콘
 - `src/build.py` — 빌드 스크립트
+
+### v1.0.1 변경사항
+- A열 공백 여백(너비 2) 추가 — VBA 스타일 레이아웃
+- 모든 셀 자동줄바꿈(wrap_text=True) 적용
+- 행 높이 텍스트 길이 기반 자동 계산
