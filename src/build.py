@@ -16,7 +16,11 @@ DIST    = os.path.join(HERE, "dist")
 BUILD   = os.path.join(HERE, "build_tmp")
 APPNAME = "등기부변환기"
 
-PACKAGES = ["pdfplumber","openpyxl","pillow","pyinstaller"]
+PACKAGES = [
+    "pdfplumber", "openpyxl", "pillow", "pyinstaller",
+    "pymupdf",       # fitz — OCR 렌더링
+    "pytesseract",   # Tesseract OCR 바인딩
+]
 
 def step(msg):
     print(f"\n{'─'*52}\n  {msg}\n{'─'*52}")
@@ -80,6 +84,9 @@ a = Analysis(
         'pdfminer.high_level','pdfminer.layout',
         'openpyxl','openpyxl.styles','openpyxl.utils',
         'PIL','PIL.Image','PIL.ImageDraw','PIL.ImageTk',
+        'PIL.ImageFilter','PIL.ImageEnhance',
+        'fitz',                        # PyMuPDF — OCR 렌더링
+        'pytesseract',                 # Tesseract OCR 바인딩
         'tkinter','tkinter.ttk','tkinter.filedialog','tkinter.messagebox',
         'queue','threading','csv','re','os','sys','platform',
     ],
