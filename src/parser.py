@@ -125,6 +125,13 @@ def _ocr_clean(text: str) -> str:
         (r'공\s*용\s*동\s*담\s*보', '공동담보'),
         (r'소\s*유\s*귀\s*에', '소유권에'),
         (r'소\s*유\s*권\s*이\s*전', '소유권이전'),
+        # 농업협동조합 오인식
+        (r'동\s*업\s*협\s*동\s*조\s*합', '농업협동조합'),
+        (r'농\s*업\s*협\s*동\s*조\s*합', '농업협동조합'),
+        # '29644 제호' → '제29644호' 순서 역전 보정
+        (r'(\d+)\s*제\s*호\s*설정계약', r'제\1호 설정계약'),
+        (r'(\d+)\s*제\s*호\s*분할로', r'제\1호 분할로'),
+        (r'(\d+)\s*제\s*호', r'제\1호'),
         (r'근\s*저\s*당\s*권\s*설\s*정', '근저당권설정'),
         (r'근\s*저\s*당\s*권', '근저당권'),
         (r'지\s*상\s*권\s*설\s*정', '지상권설정'),
@@ -152,11 +159,12 @@ def _ocr_clean(text: str) -> str:
         (r'(고양지원)(파주등기소)',     r'\1 \2'),
         (r'(의정부지방법원)(고양지원)', r'\1 \2'),
         # 제XXXXXX호 뒤 특정 동사구 경계만 공백 삽입
-        (r'(호)(분할로)',       r'\1 \2'),
-        (r'(호)(인하여)',       r'\1 \2'),
-        (r'(호)(해지)',         r'\1 \2'),
-        (r'(호)(말소)',         r'\1 \2'),
-        (r'(호)(매매)',         r'\1 \2'),
+        (r'(호)(설정계약으로)',   r'\1 \2'),
+        (r'(호)(분할로)',         r'\1 \2'),
+        (r'(호)(인하여)',         r'\1 \2'),
+        (r'(호)(해지)',           r'\1 \2'),
+        (r'(호)(말소)',           r'\1 \2'),
+        (r'(호)(매매)',           r'\1 \2'),
         # 복합 표현 경계
         (r'(분할로)(인하여)',           r'\1 \2'),
         (r'(인하여)(순위)',             r'\1 \2'),
@@ -212,14 +220,14 @@ RE_SEC_OCR = [
     ("요약",         re.compile(r"요약.{0,6}(?:용|참고|참\s*고)|주요.{0,20}요약")),
 ]
 RE_SUBSEC_OCR = re.compile(r"^(\d+)[.\s]\s*(?:소\s*유\s*지\s*분\s*현\s*황|소\s*유\s*지\s*분\s*을|저\s*당\s*권|전\s*세\s*권|\(?\s*근\s*\)?)|\b(소유지분현황|소유지분을|저당권|전세권|\(근\)저당권)")
-RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부|바랍니다\.|^\s*\[\s*참\s*고\s*|\[\s*주\s*의")
+RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부|바랍니다\.|^\s*\[\s*참\s*고\s*|\[\s*주\s*의|년\d{1,2}월\d{1,2}일\s*\d{1,2}\s*시\s*\d{1,2}분|컬러또는흑백|이하여백|출력가능")
 RE_SKIP_SUMMARY_HDR = re.compile(r"^▶|^주\s*요\s*등\s*기\s*사\s*항\s*요\s*약\s*/|^[가나다]\.\s")
 # OCR 잡음 단어 필터 (영문/특수문자 덩어리 — 표 격자선 오인식)
 RE_NOISE  = re.compile(r"^[A-Za-z]{2,}[}\]|>]{0,2}$|^[|/\\=]{1,3}$|^[A-Za-z0-9]{1,3}[}\]|]{1,2}$")
 RE_TOOJI  = re.compile(r"^\[토지\]\s*경기도")
 RE_HDR    = re.compile(r"^(순위번호|표시번호|일련번호|등기명의인)(등기목적|부동산|최종|접수|소재)?")
 RE_SUBSEC = re.compile(r"^(\d+)\.\s*(소유지분현황|소유지분을\s*제외|저당권|전세권|\(근\))")
-RE_LISTNO = re.compile(r"^목록번호\s+(\S+)")
+RE_LISTNO = re.compile(r"^목록번호\s+(\S+)|^목\s*록\s*번\s*호\s+(\S+)")
 
 def _wm(w): return w["text"] in ("열","람","용") and WMARK_X[0]<w["x0"]<WMARK_X[1]
 def _ci(x,b): return next((i for i,v in enumerate(b) if x<v), len(b))
@@ -344,7 +352,7 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
                     cur_sec='매매목록'; cur_b,cur_n=C_MAE,N_MAE
                 else:
                     cur_sec='공동담보목록'; cur_b,cur_n=C_GD,N_GD
-                cur_listno=m_ln.group(1); cur_sub=None; cur_rec=None; continue
+                cur_listno=m_ln.group(1) or m_ln.group(2); cur_sub=None; cur_rec=None; continue
 
         # 섹션 전환 — 순방향 전진만 허용 (이미 지나친 섹션으로 역행 방지)
         _SEC_ORDER = ["표제부","갑구","을구","매매목록","공동담보목록","요약"]
@@ -396,7 +404,7 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
         # ── 매매목록 ──────────────────────────────────────────────
         if cur_sec=="매매목록":
             m=RE_LISTNO.match(txt)
-            if m: cur_listno=m.group(1); flush(); cur_rec=None; continue
+            if m: cur_listno=m.group(1) or m.group(2); flush(); cur_rec=None; continue
             if txt.startswith("거래가액"):
                 res["매매목록"].append({"구분":"거래가액","목록번호":cur_listno,"내용":txt}); continue
             nsp=txt.replace(" ","")
@@ -414,7 +422,7 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
         # ── 공동담보목록 ──────────────────────────────────────────
         if cur_sec=="공동담보목록":
             m=RE_LISTNO.match(txt)
-            if m: cur_listno=m.group(1); flush(); cur_rec=None; continue
+            if m: cur_listno=m.group(1) or m.group(2); flush(); cur_rec=None; continue
             nsp=txt.replace(" ","")
             if re.search(r"기타사항|일련번호.*부동산|생성원인.*변경",nsp): continue
             col0=_cl(words[0]["text"]) if words else ""
@@ -439,22 +447,36 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
 
     flush()
 
-    # 기본정보
+    # 기본정보 — OCR 모드에서는 _clean 적용 후 패턴 매칭
     p1=[w for w in raw if w["page"]==1 and not _wm(w)]
-    s1=" ".join(w["text"] for w in p1)
+    if use_ocr:
+        s1=_clean(" ".join(w["text"] for w in p1))
+    else:
+        s1=" ".join(w["text"] for w in p1)
     info={}
     for pat,k in [(r"고유번호\s*([\d\-]+)","고유번호"),(r"열람일시\s*:\s*([\d년월일\s시분초]+?)(?=\s*\d+/|\s*$)","열람일시")]:
         m=re.search(pat,s1); info[k]=_cl(m.group(1)) if m else ""
-    m=re.search(r"\[토지\]\s*(경기도[\w\s]+?[\d\-]+)(?=\s)",s1)
+    # OCR 모드: [토지] 패턴 — 음절 공백이 제거된 상태로 매칭
+    if use_ocr:
+        m=re.search(r"\[토지\]\s*(경기도\S+)", s1)
+        if not m:
+            m=re.search(r"경기도\s*([\w]+시\s*[\w]+면\s*[\w]+리\s*[\d\-]+)", s1)
+    else:
+        m=re.search(r"\[토지\]\s*(경기도[\w\s]+?[\d\-]+)(?=\s)",s1)
     info["소재지"]=_cl(m.group(1)) if m else ""
     m=re.search(r"-\s*(토지|건물|집합건물)\s*-",s1)
-    info["부동산종류"]=m.group(1) if m else ""
+    info["부동산종류"]=m.group(1) if m else "토지"  # OCR에서 못 찾으면 기본값
     plast=[w for w in raw if w["page"]==total and not _wm(w)]
-    slast=" ".join(w["text"] for w in plast)
+    if use_ocr:
+        slast=_clean(" ".join(w["text"] for w in plast))
+    else:
+        slast=" ".join(w["text"] for w in plast)
     m=re.search(r"\[토지\]\s*(.+?(?:임야|대|전|답)\s*[\d,]+㎡)",slast)
     if m: info["현황"]=_cl(m.group(1))
 
-    # 공동담보목록: 일련번호 없는 이어붙이기 행을 직전 레코드에 합침
+    # OCR 모드: 기본정보 필드 전체에 _clean 재적용 (음절 공백 잔류 제거)
+    if use_ocr:
+        info = {k: _clean(v) for k, v in info.items()}
     if res.get("공동담보목록"):
         merged = []
         for row in res["공동담보목록"]:
