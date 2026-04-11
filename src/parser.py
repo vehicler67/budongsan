@@ -62,7 +62,7 @@ def _ocr_extract_words(pdf_path: str) -> list:
     except ImportError as e:
         raise RuntimeError(f"OCR 폴백 실패 — 필요 패키지 없음: {e}")
 
-    SCALE = 3.0          # 렌더 해상도 배율 (216 DPI — 한글 인식률 향상)
+    SCALE = 4.0          # 렌더 해상도 배율 (288 DPI — 한글 소자 인식률 대폭 향상)
     all_words = []
 
     doc = fitz.open(pdf_path)
@@ -71,22 +71,26 @@ def _ocr_extract_words(pdf_path: str) -> list:
         pix = page.get_pixmap(matrix=fitz.Matrix(SCALE, SCALE))
         img = Image.open(io.BytesIO(pix.tobytes("png")))
 
-        # 전처리: 흑백 + 대비 강화 + 이진화 (OCR 인식률 개선)
+        # 전처리: 흑백 → 샤프닝 → 대비 강화 → 이진화 (한글 획 보존)
         gray = img.convert("L")
-        enhanced = ImageEnhance.Contrast(gray).enhance(2.0)
-        binary = enhanced.point(lambda x: 0 if x < 160 else 255, '1').convert('L')
+        # 샤프닝: 한글 획 윤곽 선명화
+        from PIL import ImageFilter
+        sharpened = gray.filter(ImageFilter.SHARPEN)
+        enhanced = ImageEnhance.Contrast(sharpened).enhance(2.5)
+        # 이진화 임계값 150: 회색 배경 잡음 제거 + 흐린 획 보존
+        binary = enhanced.point(lambda x: 0 if x < 150 else 255, '1').convert('L')
 
-        # Tesseract OCR — PSM 4: 단일 컬럼, 가변 세로 크기 (표 레이아웃에 적합)
+        # Tesseract OCR — PSM 6: 균일 텍스트 블록 (표 레이아웃 최적, 6이 4보다 한글 분절 적음)
         data = pytesseract.image_to_data(
             binary, lang="kor+eng",
-            config="--psm 4 --oem 1",
+            config="--psm 6 --oem 1 -c preserve_interword_spaces=1",
             output_type=pytesseract.Output.DICT,
         )
 
         n = len(data["text"])
         for i in range(n):
             txt = data["text"][i].strip()
-            if not txt or int(data["conf"][i]) < 20:
+            if not txt or int(data["conf"][i]) < 15:
                 continue
             # 이미지 픽셀 좌표 → PDF 포인트 좌표
             x0  = data["left"][i]   / SCALE
@@ -102,15 +106,77 @@ def _ocr_extract_words(pdf_path: str) -> list:
 
 
 def _ocr_clean(text: str) -> str:
-    """OCR 결과 후처리 — 음절 사이 공백 제거, 노이즈 정리"""
+    """OCR 결과 후처리 — 음절 사이 공백 제거, 노이즈 정리, 오인식 보정"""
     import re as _re
     t = text
-    # 한글 음절 사이 단일 공백 제거: '소 유 권' → '소유권'
-    t = _re.sub(r'(?<=[\uac00-\ud7a3]) (?=[\uac00-\ud7a3])', '', t)
-    # 숫자+한글/한글+숫자 사이 공백 정리: '1997 년' → '1997년', '제 99956 호' → '제99956호'
-    t = _re.sub(r'(\d) (년|월|일|호|번|분|초|원)', r'\1\2', t)
-    t = _re.sub(r'(제|제\s*) (\d)', r'제\2', t)
-    # 연속 공백 → 단일 공백
+
+    # ── 1단계: 숫자+단위 / 단위+숫자 공백 제거 (수렴까지 반복) ─────────
+    prev = None
+    while prev != t:
+        prev = t
+        t = _re.sub(r'(\d)\s+(년|월|일|호|번|분|초|원|㎡)', r'\1\2', t)
+        t = _re.sub(r'(년|월|일)\s+(\d)', r'\1\2', t)   # '년 2', '월 14' 같은 단위+숫자 사이
+    t = _re.sub(r'제\s*(\d)', r'제\1', t)
+    t = _re.sub(r'금\s*(\d)', r'금\1', t)
+    t = _re.sub(r'(\d{6})\s*[-—]\s*(\*+)', r'\1-\2', t)
+
+    # ── 2단계: 오인식 단어 보정 (음절 공백 포함 패턴으로 직접 보정) ─────
+    _WORD_FIXES = [
+        (r'공\s*용\s*동\s*담\s*보', '공동담보'),
+        (r'소\s*유\s*귀\s*에', '소유권에'),
+        (r'소\s*유\s*권\s*이\s*전', '소유권이전'),
+        (r'근\s*저\s*당\s*권\s*설\s*정', '근저당권설정'),
+        (r'근\s*저\s*당\s*권', '근저당권'),
+        (r'지\s*상\s*권\s*설\s*정', '지상권설정'),
+        (r'임\s*의\s*경\s*매', '임의경매'),
+        (r'가\s*압\s*류', '가압류'),
+        (r'채\s*권\s*최\s*고\s*액', '채권최고액'),
+        (r'설\s*정\s*계\s*약', '설정계약'),
+        (r'담\s*보\s*목\s*록', '담보목록'),
+        (r'고\s*람\s*양\s*지\s*원', '고양지원'),
+        (r'고\s*랑\s*지\s*원', '고양지원'),
+        (r'파\s*람\s*주', '파주'),
+    ]
+    for pat, rep in _WORD_FIXES:
+        t = _re.sub(pat, rep, t)
+
+    # ── 3단계: 한글 음절 사이 공백 제거 (반복 수렴) ─────────────────────
+    prev = None
+    while prev != t:
+        prev = t
+        t = _re.sub(r'(?<=[\uac00-\ud7a3]) (?=[\uac00-\ud7a3])', '', t)
+
+    # ── 4단계: 의미 단어 경계 공백 삽입 ────────────────────────────────
+    _SPACE_FIXES = [
+        # 기관명 경계
+        (r'(고양지원)(파주등기소)',     r'\1 \2'),
+        (r'(의정부지방법원)(고양지원)', r'\1 \2'),
+        # 제XXXXXX호 뒤 특정 동사구 경계만 공백 삽입
+        (r'(호)(분할로)',       r'\1 \2'),
+        (r'(호)(인하여)',       r'\1 \2'),
+        (r'(호)(해지)',         r'\1 \2'),
+        (r'(호)(말소)',         r'\1 \2'),
+        (r'(호)(매매)',         r'\1 \2'),
+        # 복합 표현 경계
+        (r'(분할로)(인하여)',           r'\1 \2'),
+        (r'(인하여)(순위)',             r'\1 \2'),
+        (r'(매매로)(인하여)',           r'\1 \2'),
+        (r'(해지로)(인하여)',           r'\1 \2'),
+        (r'(공유물)(분할)',             r'\1 \2'),
+        (r'(설정계약으로)(인하여)',     r'\1 \2'),
+        # 주소 행정구역 경계 (도/시/군/구/읍/면/동/리 뒤 공백)
+        (r'(경기도)(파주시|고양시|광주시|의정부시)', r'\1 \2'),
+        (r'(파주시|고양시|광주시|의정부시)(문산읍|파평면|중부면|파주읍)', r'\1 \2'),
+        (r'(문산읍|파평면|중부면|파주읍)([가-힣]+(?:리|동|로|길))', r'\1 \2'),
+        # 지분 표시 앞 공백 ('공유자지분' → '공유자 지분', '2분의1' 숫자 경계)
+        (r'(공유자)(지분)',     r'\1 \2'),
+        (r'(지분)(\d)',        r'\1 \2'),
+        (r'([가-힣])(\d+분의)', r'\1 \2'),
+    ]
+    for pat, rep in _SPACE_FIXES:
+        t = _re.sub(pat, rep, t)
+
+    # ── 5단계: 연속 공백 → 단일 공백 ────────────────────────────────────
     t = _re.sub(r'  +', ' ', t)
     return t.strip()
 
@@ -139,14 +205,17 @@ RE_SEC = [
 # OCR 모드용 — 브래킷 없이도 인식 (【】 오인식 보정)
 # 매매목록/공동담보목록은 '목록번호' 라인으로만 감지 (갑구 내 '매매목록 제XXXX호' 오인식 방지)
 RE_SEC_OCR = [
-    ("표제부",       re.compile(r"표\s*제\s*부|제\s*부\s*[】\])]")),
-    ("갑구",         re.compile(r"갑\s*구")),
-    ("을구",         re.compile(r"을\s*구|소유권이외")),  # 【을구】가 '= 구 】'로 OCR될 때 '소유권이외' 로 감지
-    ("공동담보목록", re.compile(r"[【\[]\s*공\s*동\s*(?:\s*담\s*)?보\s*목\s*(?:록\s*)?\s*[】\]]")),  # 【공동보목】/【공동담보목록】 등 OCR 변형, 셀 데이터와 구분 위해 양쪽 브래킷 필수
+    ("표제부",       re.compile(r"표\s*제\s*부|\[\s*=?\s*제\s*부|제\s*부\s*[】\])]")),
+    ("갑구",         re.compile(r"갑\s*구|\[\s*감\s*구\s*\]")),
+    ("을구",         re.compile(r"을\s*구|소유권이외")),
+    ("공동담보목록", re.compile(r"[【\[]\s*공\s*동\s*(?:\s*담\s*)?보\s*목\s*(?:록\s*)?\s*[】\]]")),
     ("요약",         re.compile(r"요약.{0,6}(?:용|참고|참\s*고)|주요.{0,20}요약")),
 ]
-RE_SUBSEC_OCR = re.compile(r"^(\d+)[.\s]\s*(?:소\s*유\s*지\s*분\s*현\s*황|소\s*유\s*지\s*분\s*을|저\s*당\s*권|전\s*세\s*권|\(?\s*근\s*\)?)")
-RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부")
+RE_SUBSEC_OCR = re.compile(r"^(\d+)[.\s]\s*(?:소\s*유\s*지\s*분\s*현\s*황|소\s*유\s*지\s*분\s*을|저\s*당\s*권|전\s*세\s*권|\(?\s*근\s*\)?)|\b(소유지분현황|소유지분을|저당권|전세권|\(근\)저당권)")
+RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부|바랍니다\.|^\s*\[\s*참\s*고\s*|\[\s*주\s*의")
+RE_SKIP_SUMMARY_HDR = re.compile(r"^▶|^주\s*요\s*등\s*기\s*사\s*항\s*요\s*약\s*/|^[가나다]\.\s")
+# OCR 잡음 단어 필터 (영문/특수문자 덩어리 — 표 격자선 오인식)
+RE_NOISE  = re.compile(r"^[A-Za-z]{2,}[}\]|>]{0,2}$|^[|/\\=]{1,3}$|^[A-Za-z0-9]{1,3}[}\]|]{1,2}$")
 RE_TOOJI  = re.compile(r"^\[토지\]\s*경기도")
 RE_HDR    = re.compile(r"^(순위번호|표시번호|일련번호|등기명의인)(등기목적|부동산|최종|접수|소재)?")
 RE_SUBSEC = re.compile(r"^(\d+)\.\s*(소유지분현황|소유지분을\s*제외|저당권|전세권|\(근\))")
@@ -252,7 +321,11 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
 
     for k in sorted(buckets):
         words_all=sorted(buckets[k],key=lambda w:w["x0"])
-        words=[w for w in words_all if not _wm(w)]
+        # OCR 모드: 단어 단위 잡음 제거 (영문자 덩어리, 표 격자선 오인식 등)
+        if use_ocr:
+            words=[w for w in words_all if not _wm(w) and not RE_NOISE.match(w["text"].strip())]
+        else:
+            words=[w for w in words_all if not _wm(w)]
         if not words: continue
         txt=_clean(" ".join(w["text"] for w in words))
         if not txt: continue
@@ -293,15 +366,18 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
 
         # ── 요약 ──────────────────────────────────────────────────
         if cur_sec=="요약":
+            if RE_SKIP_SUMMARY_HDR.match(txt): continue
             if re.match(r"^\[\s*주\s*의|^\[\s*참\s*고",txt): continue
             if re.match(r"^고유번호|^\[토지\]",txt): continue
             if re.match(r"^[가나다라]\.",txt): continue
-            if txt.strip() in ("바랍니다.",""): continue
+            if txt.strip() in ("바랍니다.","바 랍 니 다.","","[ 참 고 사 항 ]"): continue
             _re_subsec = RE_SUBSEC_OCR if use_ocr else RE_SUBSEC
             m=_re_subsec.match(txt)
             if m:
-                flush(cur_sub); n=m.group(2) if len(m.groups())>1 else txt
-                nsp=n.replace(" ","")
+                flush(cur_sub)
+                # group(1)=숫자서브섹션, group(2)=직접매칭 키워드
+                matched_txt = m.group(0)
+                nsp = matched_txt.replace(" ","")
                 if re.search(r"소유지분현황|소지분현황|지분현황",nsp):  cur_sub="요약_소유지분"; cur_b,cur_n=C_SUM1,N_SUM1
                 elif re.search(r"소유지분을|소지분을",nsp):             cur_sub="요약_갑구";     cur_b,cur_n=C_SUM2,N_SUM2
                 else:                                                    cur_sub="요약_을구";     cur_b,cur_n=C_SUM2,N_SUM2
@@ -390,11 +466,19 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
                     if fk in ("목록번호",): continue
                     if fk == "부동산표시":
                         ex = prev.get(fk, "")
-                        # 필지번호를 부동산표시에 이어붙임
-                        prev[fk] = (ex + " " + fv).strip() if ex else fv
+                        # 필지번호(예: '113-1', '산44-7')를 이어붙임 — 앞에 공백 없이 붙이거나 공백 붙임
+                        # 필지번호 패턴이면 붙임, 그 외는 공백으로 연결
+                        if re.match(r'^[\d산]+[-\d]+$', fv.strip()) or re.match(r'^\d+[-\d]+$', fv.strip()):
+                            prev[fk] = (ex + " " + fv).strip() if ex else fv
+                        else:
+                            prev[fk] = (ex + " " + fv).strip() if ex else fv
                     elif fk in ("관할등기소", "생성원인", "변경소멸"):
                         ex = prev.get(fk, "")
-                        prev[fk] = (ex + " " + fv).strip() if ex else fv
+                        # 빈 필드만 채우거나 이어붙임
+                        if not ex:
+                            prev[fk] = fv
+                        elif fv and fv not in ex:
+                            prev[fk] = (ex + " " + fv).strip()
         res["공동담보목록"] = merged
 
     # 요약 섹션 노이즈 행 제거 (소섹션 전환행, 참고사항 섞임)
