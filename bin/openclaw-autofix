@@ -1,0 +1,8 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+SCRIPT_PATH="${0:A}"
+BIN_DIR="${SCRIPT_PATH:h}"
+ROOT_DIR="${BIN_DIR:h}"
+
+exec "$ROOT_DIR/openclaw-autofix" "$@"

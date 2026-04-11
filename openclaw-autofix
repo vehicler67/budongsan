@@ -1,0 +1,142 @@
+#!/usr/bin/env zsh
+set -euo pipefail
+
+SCRIPT_PATH="${0:A}"
+ROOT_DIR="${SCRIPT_PATH:h}"
+cd "$ROOT_DIR"
+
+REPORT_DIR="$ROOT_DIR/logs/autofix-reports"
+mkdir -p "$REPORT_DIR"
+
+RUN_STAMP="$(date '+%Y-%m-%d_%H-%M-%S')"
+REPORT_FILE="$REPORT_DIR/$RUN_STAMP.md"
+LATEST_LINK="$REPORT_DIR/latest.md"
+
+run_capture() {
+  local __var_name="$1"
+  shift
+
+  local __output
+  local __status=0
+  if __output="$("$@" 2>&1)"; then
+    __status=0
+  else
+    __status=$?
+  fi
+
+  typeset -g "$__var_name=$__output"
+  return $__status
+}
+
+print_step() {
+  local title="$1"
+  local body="$2"
+  echo "[openclaw-autofix] $title"
+  if [[ -n "$body" ]]; then
+    echo "$body"
+  fi
+}
+
+PATCH_OUTPUT=""
+PATCH_STATUS=0
+WATCHER_OUTPUT=""
+WATCHER_STATUS=0
+RECOVERY_OUTPUT=""
+RECOVERY_STATUS=0
+HEALTH_OUTPUT=""
+HEALTH_STATUS=0
+STATUS_OUTPUT=""
+STATUS_STATUS=0
+TAIL_OUTPUT=""
+TAIL_STATUS=0
+
+if run_capture PATCH_OUTPUT "$ROOT_DIR/apply_openclaw_runtime_patch.sh"; then
+  PATCH_STATUS=0
+else
+  PATCH_STATUS=$?
+fi
+print_step "runtime patch" "$PATCH_OUTPUT"
+
+if run_capture WATCHER_OUTPUT launchctl kickstart -k "gui/$(id -u)/ai.openclaw.runtime_patch"; then
+  WATCHER_STATUS=0
+else
+  WATCHER_STATUS=$?
+fi
+print_step "runtime patch watcher" "${WATCHER_OUTPUT:-kickstart requested}"
+
+if run_capture RECOVERY_OUTPUT "$ROOT_DIR/recover_openclaw.sh"; then
+  RECOVERY_STATUS=0
+else
+  RECOVERY_STATUS=$?
+fi
+print_step "gateway recovery" "$RECOVERY_OUTPUT"
+
+if run_capture HEALTH_OUTPUT openclaw gateway health; then
+  HEALTH_STATUS=0
+else
+  HEALTH_STATUS=$?
+fi
+print_step "gateway health" "$HEALTH_OUTPUT"
+
+if run_capture STATUS_OUTPUT openclaw gateway status; then
+  STATUS_STATUS=0
+else
+  STATUS_STATUS=$?
+fi
+print_step "gateway status" "$STATUS_OUTPUT"
+
+if run_capture TAIL_OUTPUT tail -n 20 /Users/byeolgalam/.openclaw/logs/gateway.log; then
+  TAIL_STATUS=0
+else
+  TAIL_STATUS=$?
+fi
+
+cat > "$REPORT_FILE" <<EOF
+# OpenClaw Autofix Report
+
+- Run at: $(date '+%Y-%m-%d %H:%M:%S %Z')
+- Host path: $ROOT_DIR
+- Patch status: $PATCH_STATUS
+- Watcher kickstart status: $WATCHER_STATUS
+- Recovery status: $RECOVERY_STATUS
+- Health status: $HEALTH_STATUS
+- Gateway status command: $STATUS_STATUS
+- Gateway log tail status: $TAIL_STATUS
+
+## Runtime Patch
+
+\`\`\`text
+$PATCH_OUTPUT
+\`\`\`
+
+## Recovery
+
+\`\`\`text
+$RECOVERY_OUTPUT
+\`\`\`
+
+## Gateway Health
+
+\`\`\`text
+$HEALTH_OUTPUT
+\`\`\`
+
+## Gateway Status
+
+\`\`\`text
+$STATUS_OUTPUT
+\`\`\`
+
+## Recent Gateway Log
+
+\`\`\`text
+$TAIL_OUTPUT
+\`\`\`
+EOF
+
+ln -sfn "$REPORT_FILE" "$LATEST_LINK"
+echo "[openclaw-autofix] report saved: $REPORT_FILE"
+
+if (( RECOVERY_STATUS != 0 || HEALTH_STATUS != 0 || STATUS_STATUS != 0 )); then
+  exit 1
+fi
