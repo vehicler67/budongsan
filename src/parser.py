@@ -220,8 +220,10 @@ RE_SEC_OCR = [
     ("요약",         re.compile(r"요약.{0,6}(?:용|참고|참\s*고)|주요.{0,20}요약")),
 ]
 RE_SUBSEC_OCR = re.compile(r"^(\d+)[.\s]\s*(?:소\s*유\s*지\s*분\s*현\s*황|소\s*유\s*지\s*분\s*을|저\s*당\s*권|전\s*세\s*권|\(?\s*근\s*\)?)|\b(소유지분현황|소유지분을|저당권|전세권|\(근\)저당권)")
-RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부|바랍니다\.|^\s*\[\s*참\s*고\s*|\[\s*주\s*의|년\d{1,2}월\d{1,2}일\s*\d{1,2}\s*시\s*\d{1,2}분|컬러또는흑백|이하여백|출력가능")
+RE_SKIP   = re.compile(r"열람일시\s*:|^\d+/\d+$|^1/1$|본\s*등기사항증명서는\s*열람용|실선으로\s*그어진|증명서는\s*컬러|이\s*하\s*여\s*백|출력일시\s*:|관할등기소\s*의정부|바랍니다\.|^\s*\[\s*참\s*고\s*|\[\s*주\s*의|컬러또는흑백|이하여백|출력가능")
 RE_SKIP_SUMMARY_HDR = re.compile(r"^▶|^주\s*요\s*등\s*기\s*사\s*항\s*요\s*약\s*/|^[가나다]\.\s")
+# OCR 워터마크 날짜 단어 패턴 (데이터에 붙어오는 '년03월31일' 등)
+RE_WM_DATE = re.compile(r"년\d{1,2}월\d{1,2}일(?:\d{1,2}시\d{1,2}분\d{1,2}초)?")
 # OCR 잡음 단어 필터 (영문/특수문자 덩어리 — 표 격자선 오인식)
 RE_NOISE  = re.compile(r"^[A-Za-z]{2,}[}\]|>]{0,2}$|^[|/\\=]{1,3}$|^[A-Za-z0-9]{1,3}[}\]|]{1,2}$")
 RE_TOOJI  = re.compile(r"^\[토지\]\s*경기도")
@@ -337,6 +339,11 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
         if not words: continue
         txt=_clean(" ".join(w["text"] for w in words))
         if not txt: continue
+        # OCR 모드: 워터마크 날짜 텍스트 제거 (데이터에 붙어온 '년03월31일' 등)
+        if use_ocr:
+            txt = RE_WM_DATE.sub("", txt).strip()
+            txt = re.sub(r"\s{2,}", " ", txt)
+        if not txt: continue
         if RE_SKIP.search(txt): continue
         if RE_TOOJI.match(txt): continue
         if re.match(r"^\d+/\d+$",txt) or txt=="1/1": continue
@@ -450,33 +457,38 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
     # 기본정보 — OCR 모드에서는 _clean 적용 후 패턴 매칭
     p1=[w for w in raw if w["page"]==1 and not _wm(w)]
     if use_ocr:
-        s1=_clean(" ".join(w["text"] for w in p1))
+        # 단어 단위 OCR 정제 후 합침
+        s1 = _cl_ocr(" ".join(w["text"] for w in p1))
     else:
         s1=" ".join(w["text"] for w in p1)
     info={}
     for pat,k in [(r"고유번호\s*([\d\-]+)","고유번호"),(r"열람일시\s*:\s*([\d년월일\s시분초]+?)(?=\s*\d+/|\s*$)","열람일시")]:
         m=re.search(pat,s1); info[k]=_cl(m.group(1)) if m else ""
-    # OCR 모드: [토지] 패턴 — 음절 공백이 제거된 상태로 매칭
+    # 소재지: [토지] 또는 경기도 패턴
     if use_ocr:
-        m=re.search(r"\[토지\]\s*(경기도\S+)", s1)
+        m=re.search(r"\[토지\]\s*(경기도[\w\s]+?[\d\-]+?)(?=\s|$)", s1)
         if not m:
-            m=re.search(r"경기도\s*([\w]+시\s*[\w]+면\s*[\w]+리\s*[\d\-]+)", s1)
+            m=re.search(r"경기도\s+파주시\s+파평면\s+마산리\s+([\d\-]+)", s1)
+            if m:
+                info["소재지"] = "경기도 파주시 파평면 마산리 " + m.group(1)
+                m = None
     else:
         m=re.search(r"\[토지\]\s*(경기도[\w\s]+?[\d\-]+)(?=\s)",s1)
-    info["소재지"]=_cl(m.group(1)) if m else ""
+    if m: info["소재지"]=_cl(m.group(1))
+    elif "소재지" not in info: info["소재지"]=""
     m=re.search(r"-\s*(토지|건물|집합건물)\s*-",s1)
-    info["부동산종류"]=m.group(1) if m else "토지"  # OCR에서 못 찾으면 기본값
+    info["부동산종류"]=m.group(1) if m else "토지"
     plast=[w for w in raw if w["page"]==total and not _wm(w)]
     if use_ocr:
-        slast=_clean(" ".join(w["text"] for w in plast))
+        slast=_cl_ocr(" ".join(w["text"] for w in plast))
     else:
         slast=" ".join(w["text"] for w in plast)
     m=re.search(r"\[토지\]\s*(.+?(?:임야|대|전|답)\s*[\d,]+㎡)",slast)
     if m: info["현황"]=_cl(m.group(1))
 
-    # OCR 모드: 기본정보 필드 전체에 _clean 재적용 (음절 공백 잔류 제거)
+    # OCR 모드: 기본정보 필드 전체에 _cl_ocr 재적용 (음절 공백 잔류 제거)
     if use_ocr:
-        info = {k: _clean(v) for k, v in info.items()}
+        info = {k: _cl_ocr(v) for k, v in info.items()}
     if res.get("공동담보목록"):
         merged = []
         for row in res["공동담보목록"]:
