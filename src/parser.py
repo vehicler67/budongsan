@@ -110,9 +110,9 @@ def _ocr_clean(text: str) -> str:
     import re as _re
     t = text
 
-    # ── 0단계: 접수정보 역전 보정 (1단계 전에 적용해야 패턴이 맞음) ─────
-    # '년11월17일2025호제6029598' → '2025년11월17일제6029598호' (공백은 뒤에서 삽입)
-    t = _re.sub(r'년(\d{1,2})월(\d{1,2})일(\d{4})호?제?(\d+)호?', 
+    # ── 0단계: 접수정보 역전/뭉침 보정 ────────────────────────────────
+    # 패턴: '년11월17일2025호제6029598' (연도가 뒤에) → '2025년11월17일제6029598호'
+    t = _re.sub(r'년(\d{1,2})월(\d{1,2})일\s*(\d{4})호?제?(\d+)호?',
                 lambda m: f'{m.group(3)}년{m.group(1)}월{m.group(2)}일제{m.group(4)}호', t)
 
     # ── 1단계: 숫자+단위 / 단위+숫자 공백 제거 (수렴까지 반복) ─────────
@@ -352,7 +352,11 @@ def parse_registry(pdf_path:str)->Dict[str,list]:
         else:
             words=[w for w in words_all if not _wm(w)]
         if not words: continue
-        txt=_clean(" ".join(w["text"] for w in words))
+        # OCR 모드는 _cl_ocr, 일반 모드는 _cl
+        if use_ocr:
+            txt = _cl_ocr(" ".join(w["text"] for w in words))
+        else:
+            txt = _clean(" ".join(w["text"] for w in words))
         if not txt: continue
         # OCR 모드: 워터마크 날짜 텍스트 제거 (데이터에 붙어온 '년03월31일' 등)
         if use_ocr:
