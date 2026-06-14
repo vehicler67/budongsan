@@ -1,0 +1,5 @@
+*.pdf
+*.xlam
+__pycache__/
+.venv39/
+phase2_tiles/
