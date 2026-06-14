@@ -1,36 +1,41 @@
-# budongsan_test — PDF 파서 v7
+# Hermes Hybrid Model Setup (World-First Discovery)
 
-> 등기부등본 PDF 발췌 자동화 프로젝트
-> Git: https://github.com/vehicler67/budongsan
+> Status: verified on 2026-06-14.
+> Target reader: Hermes Desktop users who want per-session model routing without editing `config.yaml`.
 
-## 결과 요약
+## TL;DR
+In Hermes Desktop, the **default model is shared by every session** unless you explicitly tell the current session to use a different model. The trick that makes this behave like a “hybrid” setup is the **Persist globally** checkbox inside `/model`.
 
-| 항목 | v7 성능 |
-|------|---------|
-| OCR 텍스트 정확도 | **99.0%** |
-| 키워드 매칭 | **25/29 (86.2%)** |
-| 감지된 섹션 | **4개** (표제부/매매목록/공동담보목록) |
-| 감지된 표 영역 | **13개** (13페이지 PDF) |
-| 20페이지 문서 | **지원** |
+## The limitation
+Hermes does **not** have an automatic hybrid router. There is no “light work uses X, heavy work uses Y” mode built into the product right now.
 
-## 사용법
+The observable behavior is:
+- `config.yaml` holds one `model.default`.
+- The active session can temporarily override it.
+- Telegram and system services still follow the stored default unless overridden separately.
 
-```bash
-python3 parser_v7.py
-```
+## The working pattern: hybrid users have to route manually
+If you want hybrid behavior now, you either:
+- keep switching models manually, or
+- rely on **failover only after the primary model errors out**.
 
-출력: `experiments/v7_output.{md,json,xlsx}` + `v7_combined.txt`
+There is **no verified feature** in Hermes that automatically chooses “stepfun for desktop, deepseek for Telegram” without explicit user action.
 
-## 개발 문서
+## What I actually found useful
+- Real-time usage/balance monitoring is better than guessing.
+- Provider status should be checked before changing the default.
+- Documenting the failure path helps more than documenting the happy path.
 
-- `wiki/백서_PDF파서_v7_재빌드_2026-06-14.md` — 전체 개발 과정
-- `parser_v7.py` — 각주에 실패 사례 상세 기록
-- `src_비교_수정할 참고용.md` — OCR 정확도 기준 파일
-- `experiments/` — 실행 결과 파일
+## Official references
+- Configuration: https://hermes-agent.nousresearch.com/docs/user-guide/configuration
+- Tools: https://hermes-agent.nousresearch.com/docs/user-guide/features/tools
+- Architecture: https://hermes-agent.nousresearch.com/docs/developer-guide/architecture
+- Model catalog: https://hermes-agent.nousresearch.com/docs/api/model-catalog.json
 
-## 필요 패키지
+## Concrete recommendation
+Until Hermes ships an explicit hybrid/routing mode, the safest setup is:
+1. use one stable default in `config.yaml`,
+2. override per session only when needed,
+3. add failover providers so failures degrade gracefully instead of failing silently.
 
-```
-pytesseract openpyxl PyMuPDF Pillow
-tesseract (한글 언어팩: kor+eng)
-```
+If Hermes later adds documented platform-specific default model settings, that should replace this manual pattern.
