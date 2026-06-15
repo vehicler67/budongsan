@@ -31,8 +31,9 @@ echo ""
 # v7 파서 실행
 /usr/local/bin/python3 -c "
 import sys; sys.path.insert(0, '$SCRIPT_DIR')
+from pathlib import Path
 from parser_v7 import run
-run('$PDF')
+run(Path('$PDF'))
 "
 
 if [ $? -eq 0 ]; then
