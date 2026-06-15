@@ -442,7 +442,13 @@ def save_excel(sections, label='v7'):
         ws.cell(row=row, column=1, value=f'[{name}]').font = Font(bold=True, size=12)
         row += 1
         for line in content:
-            ws.cell(row=row, column=1, value=line)
+            # [실패사례] OCR 결과에 '=', '@', '+', '-' 로 시작하는 줄이 있으면
+            # Excel이 수식으로 해석 → 파일 손상 → 복구 경고.
+            # → 작은따옴표 prefix로 강제 텍스트 처리
+            safe_line = str(line)
+            if safe_line and safe_line[0] in '=@+-':
+                safe_line = "'" + safe_line
+            ws.cell(row=row, column=1, value=safe_line)
             row += 1
         row += 1
     path = OUT_DIR / f'{label}_output.xlsx'
