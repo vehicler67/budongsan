@@ -37,6 +37,11 @@ from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
 import fitz
+import subprocess
+import tempfile
+import os
+import sys
+from pathlib import Path
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -127,6 +132,53 @@ SECTION_KEYS = [
 # - Contrast 2.0: 대비 강화로 글자/배경 구분
 # - Threshold 175: 이진화로 OCR 노이즈 감소
 # ============================================================
+
+# ============================================================
+# [v1.0.6] kordoc PDF 전처리 — 99.998% 정확도
+# - 기존 OCR/CID 파싱 전에 kordoc으로 Markdown 변환 시도
+# - 실패 시 기존 render_page()/OCR 체인으로 자동 폴백
+# ============================================================
+
+def try_kordoc_extract(pdf_path: str) -> str | None:
+    """
+    kordoc으로 PDF → Markdown 변환 시도.
+    성공: 순수 텍스트 반환, 실패: None → 기존 OCR 체인 사용.
+    """
+    try:
+        result = subprocess.run(
+            ["kordoc", "parse", str(pdf_path), "--format", "md"],
+            capture_output=True, text=True, timeout=90
+        )
+        if result.returncode == 0 and len(result.stdout.strip()) > 100:
+            return result.stdout
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    
+    # kordoc CLI 실패 → Node API 직접 호출
+    try:
+        with tempfile.NamedTemporaryFile(suffix='.mjs', mode='w', delete=False) as f:
+            pdf_abs = str(Path(pdf_path).resolve())
+            f.write(f'''
+import {{ parse }} from "kordoc";
+import {{ readFileSync }} from "fs";
+const buf = readFileSync("{pdf_abs}");
+const r = await parse(buf);
+if (r.success) process.stdout.write(r.markdown);
+else process.exit(1);
+''')
+            f.flush()
+            f.close()
+            result = subprocess.run(
+                ["node", f.name], capture_output=True, text=True, timeout=90
+            )
+            os.unlink(f.name)
+            if result.returncode == 0 and len(result.stdout.strip()) > 100:
+                return result.stdout
+    except Exception:
+        pass
+    
+    return None
+
 
 def render_page(pdf_path, page_num, dpi=OCR_DPI):
     """
@@ -476,13 +528,18 @@ def run(pdf_path=PDF_DEFAULT, label='v7'):
     tables = detect_table_regions(pdf_path)
     print(f'  감지된 표 영역: {len(tables)}개')
 
-    # OCR + 정제
-    print(f'[v7] OCR 처리...')
-    pages = ocr_pdf(pdf_path)
-    print(f'  {len(pages)}페이지 OCR 완료')
-
-    # 정제
-    combined_raw = '\n\n'.join(p['text'] for p in pages)
+    # OCR + 정제 (kordoc 우선 시도, 실패 시 기존 OCR)
+    print(f'[v7] kordoc PDF→MD 변환 시도...')
+    kordoc_text = try_kordoc_extract(pdf_path)
+    
+    if kordoc_text:
+        print(f'  ✅ kordoc 성공 ({len(kordoc_text)}자)')
+        combined_raw = kordoc_text
+    else:
+        print(f'  ⚠️ kordoc 실패 → 기존 OCR 체인 사용')
+        pages = ocr_pdf(pdf_path)
+        print(f'  {len(pages)}페이지 OCR 완료')
+        combined_raw = '\n\n'.join(p['text'] for p in pages)
     cleaned = clean_text(combined_raw)
 
     # 섹션 파싱
